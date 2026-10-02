@@ -47,6 +47,9 @@ FUGAS = {
 ANIOS_ENTRENAMIENTO = range(2016, 2022)
 ANIOS_VALIDACION = range(2022, 2025)
 
+UMBRAL_LLUVIA = 150.0
+OBJETIVO_LLUVIA = "lluvia_intensa"
+
 
 class RegresionLogistica:
     """Logistica con penalizacion L2 y pesos por clase, resuelta con L-BFGS."""
@@ -174,6 +177,86 @@ def _ensamble(ratio):
     )
 
 
+def ejecutar_lluvia():
+    """Probabilidad de que el mes supere UMBRAL_LLUVIA mm.
+
+    No es un pronostico meteorologico: con este archivo no hay con que
+    anticipar el clima de un mes futuro. Lo que se estima es la probabilidad
+    climatologica de lluvia intensa condicionada a lo que ya ocurrio en los
+    meses anteriores. Usa las mismas features legales del modelo de
+    movimientos en masa: para el mes t solo entra informacion hasta t-1.
+    """
+    crudo = pd.read_csv(RUTA_PANEL).sort_values(["codigo_dane", "anio", "mes"]).reset_index(drop=True)
+    crudo[OBJETIVO_LLUVIA] = (crudo["lluvia_mm"] > UMBRAL_LLUVIA).astype(int)
+
+    panel = construir_features(crudo)
+
+    entrena = panel[panel["anio"].isin(ANIOS_ENTRENAMIENTO)]
+    valida = panel[panel["anio"].isin(ANIOS_VALIDACION)]
+
+    X_tr, y_tr = entrena[FEATURES], entrena[OBJETIVO_LLUVIA].to_numpy()
+    X_va, y_va = valida[FEATURES], valida[OBJETIVO_LLUVIA].to_numpy()
+
+    ratio = y_tr.sum() / (len(y_tr) - y_tr.sum())
+    base_va = valida["lluvia_mm"].to_numpy() > UMBRAL_LLUVIA
+
+    modelos = {
+        "Regresion logistica": RegresionLogistica(alpha=1.0).fit(X_tr, y_tr),
+        "XGBoost": _ensamble(ratio).fit(X_tr, y_tr),
+    }
+
+    resultados = {}
+    for nombre, m in modelos.items():
+        p = m.predict_proba(X_va)[:, 1]
+        curva = barrer_umbral(y_va, p)
+        umbral = seleccionar_umbral(curva)
+        resultados[nombre] = {
+            "modelo": m,
+            "curva": curva,
+            "umbral": umbral,
+            "probas": p,
+            "metricas": metricas(y_va, (p >= 0.5).astype(int)),
+            "metricas_umbral": metricas(y_va, (p >= umbral).astype(int)),
+            "auc": roc_auc_score(y_va, p),
+            "y_va": y_va,
+        }
+
+    return {
+        "panel": panel,
+        "entrena": entrena,
+        "valida": valida,
+        "resultados": resultados,
+        "base": metricas(y_va, base_va),
+        "umbral": UMBRAL_LLUVIA,
+    }
+
+
+def predecir_lluvia_enero_2025():
+    """Enero 2025 con la misma frontera de informacion: features hasta dic 2024."""
+    historico = pd.read_csv(RUTA_PANEL)
+    ultimo = historico.sort_values(["codigo_dane", "anio", "mes"]).groupby("codigo_dane").tail(1)
+    filas = [
+        {"codigo_dane": f["codigo_dane"], "municipio": f["municipio"], "anio": 2025, "mes": 1, "altitud_m": int(f["altitud_m"])}
+        for _, f in ultimo.iterrows()
+    ]
+    panel = construir_features(_anexar_filas_futuras(historico, filas))
+    enero = panel[panel["anio"] == 2025].copy()
+
+    X = enero[FEATURES]
+    salida = enero[["codigo_dane", "municipio", "anio", "mes", "altitud_m"]].reset_index(drop=True)
+    for col in FEATURES:
+        if col not in salida.columns:
+            salida[col] = enero[col].to_numpy()
+
+    ajuste = ejecutar_lluvia()
+    for nombre, res in ajuste["resultados"].items():
+        p = res["modelo"].predict_proba(X)[:, 1]
+        salida[f"prob_{nombre}"] = (100 * p).round(1)
+        salida[f"pred_{nombre}"] = (p >= res["umbral"]).astype(int)
+        salida[f"umbral_{nombre}"] = res["umbral"]
+    return salida, ajuste
+
+
 def ejecutar():
     crudo = pd.read_csv(RUTA_PANEL)
     panel = construir_features(crudo)
@@ -225,54 +308,83 @@ def _importancias(nombre, modelo):
     return pd.Series(modelo.feature_importances_, index=FEATURES).sort_values(ascending=False)
 
 
-def predecir_enero_2025(ruta_panel=RUTA_PANEL):
-    """Features de 2025-01 construidas SOLO con informacion hasta 2024-12."""
-    crudo = pd.read_csv(ruta_panel)
-    panel = construir_features(crudo)
-    ultimo = panel.sort_values(["codigo_dane", "anio", "mes"]).groupby("codigo_dane").tail(1).copy()
-    ultimo["mes"] = 1
-    ultimo["mes_sin"] = 0.0
-    ultimo["mes_cos"] = 1.0
-    return ultimo[["codigo_dane", "municipio"] + FEATURES].reset_index(drop=True)
+def predecir_enero_2025(ruta_panel=RUTA_PANEL, ruta_prueba=RUTA_PRUEBA):
+    """Enero 2025 con la misma ruta que el resto de meses: la lluvia de
+    diciembre 2024 entra como rezago. Delegar en predecir_2025 evita que
+    las dos rutas se desincronicen."""
+    tabla, _, _ = predecir_2025(ruta_panel, ruta_prueba)
+    quitar = [c for c in tabla.columns if c.startswith(("prob_", "pred_", "umbral_")) or c == "hubo_mm"]
+    return tabla[tabla["mes"] == 1].drop(columns=quitar).reset_index(drop=True)
 
 
 def _mes_sin_cos(mes):
     return round(math.sin(2 * math.pi * (mes - 1) / 12), 6), round(math.cos(2 * math.pi * (mes - 1) / 12), 6)
 
 
+def _anexar_filas_futuras(historico, filas):
+    """Agrega filas de meses futuros con lluvia unknown como NaN. Como todas las
+    features se construyen con shift(1), una fila NaN solo afecta a los meses
+    posteriores a ella, nunca a la suya propia."""
+    vacias = historico.iloc[:0].copy()
+    nuevas = []
+    for f in filas:
+        fila = vacias.iloc[0].copy() if len(vacias) else None
+        registro = {
+            "codigo_dane": f["codigo_dane"],
+            "municipio": f["municipio"],
+            "anio": int(f["anio"]),
+            "mes": int(f["mes"]),
+            "lluvia_mm": f.get("lluvia_mm", np.nan),
+            "eventos_mes": f.get("eventos_mes", np.nan),
+            "altitud_m": f["altitud_m"],
+        }
+        nuevas.append(registro)
+    return pd.concat([historico, pd.DataFrame(nuevas)], ignore_index=True)
+
+
 def predecir_2025(ruta_panel=RUTA_PANEL, ruta_prueba=RUTA_PRUEBA):
-    """Prediccion de los 1044 municipio-mes de 2025.
+    """Prediccion de 2025 sin usar el resultado real de 2025.
 
-    Frontera de informacion, fila por fila: para el mes objetivo t solo se
-    usa lluvia_mm y eventos_mes de meses estrictamente anteriores a t. El
-    mes 1 no usa nada de 2025. Los meses 2-12 usan la lluvia ya observada
-    de meses 1..t-1 de 2025, que al inicio de t ya se conoce. Nunca se lee
-    la lluvia del propio mes t ni hubo_mm de ningun mes de 2025.
+    Si el archivo de prueba esta disponible se construye la serie completa de
+    12 meses de forma secuencial: para el mes objetivo t solo entra la lluvia
+    de meses anteriores a t. Si no esta disponible, el unico mes que se puede
+    anticipar sin datos de 2025 es enero, porque sus features provienen de
+    2024.
 
-    Devuelve ademas la columna real, que se adjunta DESPUES de predecir y no
-    participa en el ajuste: existe solo para que compares.
+    Nunca se lee hubo_mm de 2025 para entrenar, validar ni elegir umbral.
     """
     historico = pd.read_csv(ruta_panel)
-    prueba = pd.read_csv(ruta_prueba)
+    existe_prueba = Path(ruta_prueba).exists()
+    prueba = pd.read_csv(ruta_prueba) if existe_prueba else None
 
-    extension = []
-    for (dane, municipio), g in prueba.groupby(["codigo_dane", "municipio"]):
-        g = g.sort_values("mes")
-        for _, f in g.iterrows():
-            extension.append(
-                {
-                    "codigo_dane": dane,
-                    "municipio": municipio,
-                    "anio": int(f["anio"]),
-                    "mes": int(f["mes"]),
-                    "lluvia_mm": float(f["lluvia_mm"]),
-                    "eventos_mes": int(f["eventos_mes"]),
-                    "altitud_m": int(f["altitud_m"]),
-                }
-            )
-    completo = pd.concat([historico, pd.DataFrame(extension)], ignore_index=True)
+    if existe_prueba:
+        filas = [
+            {
+                "codigo_dane": dane,
+                "municipio": municipio,
+                "anio": int(f["anio"]),
+                "mes": int(f["mes"]),
+                "lluvia_mm": float(f["lluvia_mm"]),
+                "eventos_mes": int(f["eventos_mes"]),
+                "altitud_m": int(f["altitud_m"]),
+            }
+            for (dane, municipio), g in prueba.groupby(["codigo_dane", "municipio"])
+            for _, f in g.sort_values("mes").iterrows()
+        ]
+    else:
+        ultimo = historico.sort_values(["codigo_dane", "anio", "mes"]).groupby("codigo_dane").tail(1)
+        filas = [
+            {
+                "codigo_dane": f["codigo_dane"],
+                "municipio": f["municipio"],
+                "anio": 2025,
+                "mes": 1,
+                "altitud_m": int(f["altitud_m"]),
+            }
+            for _, f in ultimo.iterrows()
+        ]
 
-    panel = construir_features(completo)
+    panel = construir_features(_anexar_filas_futuras(historico, filas))
     objetivo = panel[panel["anio"] == 2025].copy()
 
     X = objetivo[FEATURES]
@@ -288,6 +400,8 @@ def predecir_2025(ruta_panel=RUTA_PANEL, ruta_prueba=RUTA_PRUEBA):
         salida[f"pred_{nombre}"] = (p >= res["umbral"]).astype(int)
         salida[f"umbral_{nombre}"] = res["umbral"]
 
-    real = prueba[["codigo_dane", "anio", "mes", "hubo_mm"]].copy()
-    salida = salida.merge(real, on=["codigo_dane", "anio", "mes"], how="left")
-    return salida, ajuste
+    if existe_prueba:
+        real = prueba[["codigo_dane", "anio", "mes", "hubo_mm"]].copy()
+        salida = salida.merge(real, on=["codigo_dane", "anio", "mes"], how="left")
+
+    return salida, ajuste, existe_prueba

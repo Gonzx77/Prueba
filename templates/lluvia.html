@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ titulo }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <nav class="tabs">
+    <a href="{{ url_for('index') }}">Datos</a>
+    <a href="{{ url_for('vista_modelo') }}">Movimientos en masa</a>
+    <a href="{{ url_for('vista_predicciones') }}">Predicciones 2025</a>
+    <a class="activo" href="{{ url_for('vista_lluvia') }}">Lluvia enero</a>
+  </nav>
+
+  <header>
+    <h1>Diez municipios con mayor probabilidad de lluvia &middot; enero 2025</h1>
+    <p class="sub">
+      Se predice la probabilidad de que el municipio supere los
+      <strong>{{ '%.1f'|format(umbral) }} mm</strong> de enero, que es el percentil 75 de la lluvia
+      de los eneros de 2015&ndash;2024. En enero ese umbral se alcanza en el
+      {{ '%.0f'|format(100 * frecuencia_enero) }}% de los meses.
+    </p>
+  </header>
+
+  <section>
+    <h2>Resultado</h2>
+    <p class="sub"><a class="btn" href="{{ url_for('descargar_lluvia') }}">Descargar CSV</a></p>
+    <div class="scroll">{{ html_top|safe }}</div>
+    <p class="sub">
+      Probabilidades calibradas: en validacion la media predicha fue
+      {{ '%.2f'|format(metricas[0].prob_media) }} contra una frecuencia real de
+      {{ '%.2f'|format(metricas[0].frecuencia) }}.
+      La columna de lluvia muestra diciembre 2024 y el acumulado 2024, que son observaciones del
+      pasado, no predicciones.
+    </p>
+  </section>
+
+  <section class="nota">
+    <h2>Por qué cambió el método anterior</h2>
+    <ul>
+      <li>Antes se usaba un umbral fijo de <strong>150 mm para todos los meses</strong>. Pero la lluvia es
+        muy estacional: la mediana va de 45.7 mm en enero a 248.8 mm en octubre. Con 150 mm, la probabilidad
+        de enero era 4.1%: apenas 3.6 municipios de 87 podrian superarlo, y el top 10 terminaba ordenando
+        ruido.</li>
+      <li>Ahora el umbral es <strong>relativo a cada mes</strong> (percentil 75 de ese mes), calculado
+        <strong>solo con años anteriores</strong> a los que se predicen. En el backtest cada corte recalcula
+        sus umbrales sin mirar el enero que evalua.</li>
+      <li>Los modelos ya no llevan pesos de clase: el recall se controla con el umbral, no
+        falseando la escala de probabilidades. Antes la media predicha era 0.496 cuando la frecuencia
+        real era 0.092.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Validación temporal &middot; 2024</h2>
+    <p class="sub">
+      Entrenamiento 2016&ndash;2023 ({{ '{:,}'.format(n_tr) }} filas), validación solo 2024
+      ({{ '{:,}'.format(n_va) }} filas). Split por año, sin mezcla aleatoria.
+    </p>
+    <table class="tabla">
+      <thead>
+        <tr><th>Modelo</th><th>AUC</th><th class="num">Umbral</th><th class="num">Recall</th>
+          <th class="num">Precision</th><th class="num">TP</th><th class="num">FP</th><th class="num">FN</th></tr>
+      </thead>
+      <tbody>
+        {% for m in metricas %}
+        <tr>
+          <td>{{ m.nombre }}</td>
+          <td>{{ '%.3f'|format(m.auc) }}</td>
+          <td class="num">{{ '%.3f'|format(m.umbral) }}</td>
+          <td class="num">{{ '%.3f'|format(m.sens) }}</td>
+          <td class="num">{{ '%.3f'|format(m.prec) }}</td>
+          <td class="num">{{ m.tp }}</td>
+          <td class="num">{{ m.fp }}</td>
+          <td class="num">{{ m.fn }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="sub">Se reporta recall y precision, no accuracy: con 14.8% de positivos, predecir siempre
+      &laquo;no&raquo; daría 85% de accuracy y cero recall.</p>
+  </section>
+
+  <section>
+    <h2>¿Sirve el ranking? &middot; backtest sobre 8 eneros históricos</h2>
+    <p class="sub">
+      Ventana expansiva: para cada enero se entrena solo con años anteriores, se rankean los 87 municipios
+      y se toman los 10 primeros. <strong>lift 1.00x</strong> significa que el top 10 no vale más que
+      elegir al azar.
+    </p>
+    <table class="tabla">
+      <thead>
+        <tr><th>Año</th><th>Modelo</th><th class="num">Municipios lluviosos</th>
+          <th class="num">En el top 10</th><th class="num">Lift</th><th class="num">AUC</th></tr>
+      </thead>
+      <tbody>
+        {% for _, f in backtest.iterrows() %}
+        <tr>
+          <td>{{ '%d'|format(f.anio) }}</td>
+          <td>{{ f.modelo }}</td>
+          <td class="num">{{ f.n_lluviosos }}</td>
+          <td class="num">{{ f.top10_lluviosos }}</td>
+          <td class="num">{{ '%.2f'|format(f.lift) }}x</td>
+          <td class="num">{{ '%.3f'|format(f.auc) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <table class="tabla corta" style="margin-top:16px">
+      <thead><tr><th>Resumen del ranking</th><th class="num">Lift medio</th><th class="num">Lift mediano</th><th class="num">AUC medio</th></tr></thead>
+      <tbody>
+        {% for m in metricas %}
+        <tr><td>{{ m.nombre }}</td>
+          <td class="num">{{ '%.2f'|format(m.lift_medio) }}x</td>
+          <td class="num">{{ '%.2f'|format(m.lift_med) }}x</td>
+          <td class="num">{{ '%.3f'|format(m.auc_eneros) }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Línea base &middot; enero 2025 = enero del año anterior</h2>
+    <table class="tabla">
+      <thead><tr><th>Año</th><th class="num">Lluviosos</th><th class="num">TP</th><th class="num">FP</th><th class="num">FN</th><th class="num">Recall</th><th class="num">Precision</th></tr></thead>
+      <tbody>
+        {% for _, f in base.iterrows() %}
+        <tr><td>{{ '%d'|format(f.anio) }}</td><td class="num">{{ f.pos }}</td><td class="num">{{ f.tp }}</td>
+          <td class="num">{{ f.fp }}</td><td class="num">{{ f.fn }}</td>
+          <td class="num">{{ '%.3f'|format(f.sens) if f.sens == f.sens else '&mdash;'|safe }}</td>
+          <td class="num">{{ '%.3f'|format(f.prec) if f.prec == f.prec else '&mdash;'|safe }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="sub">Recall promedio de la línea base: <strong>{{ '%.3f'|format(base_sens) }}</strong>.
+      Es errática porque la línea base solo acierta cuando dos eneros consecutivos se parecen, y algunos
+      eneros fueron extremadamente secos y otros extremadamente húmedos.</p>
+  </section>
+
+  <section class="nota">
+    <h2>Límites que conviene no ocultar</h2>
+    <ul>
+      <li><strong>No es un pronóstico del tiempo.</strong> El archivo no tiene pronóstico ni satélite.
+        Lo que se calcula es la probabilidad climatológica de superar el umbral de enero segun lo que ya
+        llovió en los meses anteriores.</li>
+      <li>La probabilidad máxima para enero 2025 es {{ '%.0f'|format(prob_max) }}%, y los
+        diez primeros van de {{ '%.0f'|format(prob_min_top10) }}% a {{ '%.0f'|format(prob_max_top10) }}%. Son valores bajos porque enero es un mes seco: el modelo no puede
+        inventar señal que no está.</li>
+      <li>Los dos modelos coinciden en <strong>{{ acuerdo }} de 10</strong> municipios del top 10. Donde no
+        coinciden, el orden es frágil; conviene presentar los 10 como <em>candidatos a vigilar</em>, no como
+        un ranking preciso.</li>
+      <li>Este modelo predice <strong>lluvia</strong>, no movimientos en masa. El enunciado de
+        <code>info.txt</code> pide movimientos en masa, que es la pestaña &laquo;Movimientos en masa&raquo;.</li>
+    </ul>
+  </section>
+</body>
+</html>

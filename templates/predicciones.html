@@ -11,31 +11,45 @@
     <a href="{{ url_for('index') }}">Datos</a>
     <a href="{{ url_for('vista_modelo') }}">Modelo</a>
     <a class="activo" href="{{ url_for('vista_predicciones') }}">Predicciones {{ anio }}</a>
+    <a href="{{ url_for('vista_lluvia') }}">Lluvia enero</a>
   </nav>
 
   <header>
     <h1>{{ titulo }}</h1>
     <p class="sub">
-      Las {{ '{:,}'.format(n) }} filas municipio&times;mes de {{ anio }} (87 municipios &times; 12 meses),
-      con probabilidad y decision binaria de cada modelo.
+      {% if existe_prueba %}
+        Las {{ '{:,}'.format(n) }} filas municipio&times;mes de {{ anio }} (87 municipios &times; 12 meses),
+        con probabilidad y decision binaria de cada modelo.
+      {% else %}
+        <strong>{{ n }} municipios para enero {{ anio }}</strong>, con probabilidad y decision binaria de cada
+        modelo. Es el unico mes que se puede anticipar sin conocer la lluvia de {{ anio }}.
+      {% endif %}
     </p>
   </header>
 
   <section class="nota">
     <h2>De donde sale cada numero</h2>
     <ul>
-      <li>Las <strong>probabilidades y decisiones</strong> estan calculadas sin usar <code>hubo_mm</code>
-        de {{ anio }} en ningun momento: el modelo se ajusto con 2016&ndash;2021 y se eligio umbral en 2022&ndash;2024.</li>
-      <li>La columna <code>hubo_mm</code> se adjunta <strong>despues</strong> de predecir, unicamente para que
-        compares. NoTraino, no valido, no ajusto umbrales con ella.</li>
+      <li>Las <strong>probabilidades y decisiones</strong> se calculan sin usar ningun resultado real de
+        {{ anio }}: el modelo se ajusto con {{ anio_tr }} y el umbral se eligio con {{ anio_va }}.</li>
+      {% if not existe_prueba %}
+      <li><strong>No hay archivo de prueba de {{ anio }} en esta corrida</strong>, asi que estas predicciones
+        son a ciegas: no se pueden puntuar todavia. Cuando tengas el archivo, se puede comparar.</li>
+      <li>Solo se anticipa <strong>enero</strong>. Las features de febrero en adelante necesitan la lluvia ya
+        observada de enero, que vive en el archivo de {{ anio }}. Si se quisieran anticipar los 12 meses sin ese
+        archivo habria que asumir que la lluvia se repite, lo que rebajaria el rendimiento.</li>
+      {% else %}
+      <li>La columna <code>hubo_mm</code> se adjunta <strong>despues</strong> de predecir, unicamente para
+        que compares. No entreno, no valido, no ajusto umbrales con ella.</li>
+      {% endif %}
       <li>La frontera de informacion es fila por fila: para el mes <em>t</em> solo entra la lluvia de meses
-        anteriores a <em>t</em>. Enero {{ anio }} usa la lluvia de diciembre 2024; los meses siguientes usan la
-        lluvia ya observada de los meses anteriores de {{ anio }}. Nunca la lluvia del propio mes <em>t</em>.</li>
+        anteriores a <em>t</em>. Enero {{ anio }} usa la lluvia de diciembre 2024. Nunca la del propio mes <em>t</em>.</li>
       <li>Las columnas <code>lluvia_mm_mes_anterior</code>, <code>lluvia_acum_3m</code>, <code>lluvia_acum_12m</code>
         y <code>eventos_12m_lag</code> van incluidas para que audites esa frontera tu mismo.</li>
     </ul>
   </section>
 
+  {% if existe_prueba %}
   <section>
     <h2>Resumen por mes (comparado con el valor real)</h2>
     <table class="tabla">
@@ -58,9 +72,10 @@
       </tbody>
     </table>
   </section>
+  {% endif %}
 
   <section>
-    <h2>Las {{ '{:,}'.format(n) }} predicciones</h2>
+    <h2>{% if existe_prueba %}Las {{ '{:,}'.format(n) }} predicciones{% else %}Los {{ n }} municipios de enero {{ anio }}{% endif %}</h2>
     <p class="sub"><a class="btn" href="{{ url_for('descargar_predicciones') }}">Descargar CSV</a></p>
     <div class="scroll alto">{{ tabla|safe }}</div>
   </section>

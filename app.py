@@ -2,6 +2,7 @@ from pathlib import Path
 
 import json
 
+import numpy as np
 import pandas as pd
 from flask import Flask, render_template, request
 
@@ -259,6 +260,8 @@ def vista_modelo():
 
     principal = max(r["resultados"].items(), key=lambda kv: kv[1]["metricas"]["f1"])
     X = M.predecir_enero_2025()
+    tabla_enero, _, _ = M.predecir_2025()
+    enero = tabla_enero[tabla_enero["mes"] == 1]
     ranking = X.assign(probabilidad=principal[1]["modelo"].predict_proba(X[M.FEATURES])[:, 1]).sort_values(
         "probabilidad", ascending=False
     )
@@ -292,33 +295,34 @@ def vista_predicciones():
     import modelo as M
 
     if "predicciones" not in _cache:
-        tabla, _ = M.predecir_2025()
-        _cache["predicciones"] = tabla
+        tabla, _, existe = M.predecir_2025()
+        _cache["predicciones"] = (tabla, existe)
+    t, existe_prueba = _cache["predicciones"]
 
-    t = _cache["predicciones"]
     modelos = ["Regresion logistica", "XGBoost"]
 
     tabla_html = (
-        t.sort_values(["anio", "mes", "codigo_dane"])
+        t.sort_values("prob_Regresion logistica", ascending=False)
         .to_html(index=False, classes="tabla", border=0, float_format=lambda v: f"{v:g}")
     )
 
     resumen_meses = []
-    for mes in range(1, 13):
-        bloque = t[t["mes"] == mes]
-        fila = {"mes": mes, "reales": int(bloque["hubo_mm"].sum()), "celdas": []}
-        for n in modelos:
-            pred = bloque[f"pred_{n}"]
-            tp = int(((bloque["hubo_mm"] == 1) & (pred == 1)).sum())
-            fn = int(((bloque["hubo_mm"] == 1) & (pred == 0)).sum())
-            fp = int(((bloque["hubo_mm"] == 0) & (pred == 1)).sum())
-            fila["celdas"].append(
-                {
-                    "texto": f"{tp / (tp + fn):.2f} / {tp / (tp + fp):.2f}" if tp + fn and tp + fp else "s/p",
-                    "detalle": f"TP {tp} · FN {fn} · FP {fp}",
-                }
-            )
-        resumen_meses.append(fila)
+    if existe_prueba:
+        for mes in range(1, 13):
+            bloque = t[t["mes"] == mes]
+            fila = {"mes": mes, "reales": int(bloque["hubo_mm"].sum()), "celdas": []}
+            for n in modelos:
+                pred = bloque[f"pred_{n}"]
+                tp = int(((bloque["hubo_mm"] == 1) & (pred == 1)).sum())
+                fn = int(((bloque["hubo_mm"] == 1) & (pred == 0)).sum())
+                fp = int(((bloque["hubo_mm"] == 0) & (pred == 1)).sum())
+                fila["celdas"].append(
+                    {
+                        "texto": f"{tp / (tp + fn):.2f} / {tp / (tp + fp):.2f}" if tp + fn and tp + fp else "s/p",
+                        "detalle": f"TP {tp} · FN {fn} · FP {fp}",
+                    }
+                )
+            resumen_meses.append(fila)
 
     return render_template(
         "predicciones.html",
@@ -326,9 +330,100 @@ def vista_predicciones():
         tabla=tabla_html,
         modelos=modelos,
         resumen_meses=resumen_meses,
+        existe_prueba=existe_prueba,
         n=len(t),
+        meses=sorted(t["mes"].unique()),
         anio=2025,
     )
+
+
+@app.route("/lluvia")
+def vista_lluvia():
+    import lluvia as L
+
+    if "lluvia" not in _cache:
+        import modelo as M
+        ev = L.evaluar()
+        bt = L.backtest_eneros(pd.read_csv(M.RUTA_PANEL), range(2017, 2025))
+        base = L.linea_base_enero(pd.read_csv(M.RUTA_PANEL), range(2017, 2025))
+        tabla, umbrales, _ = L.predecir_enero_2025()
+        _cache["lluvia"] = (ev, bt, base, tabla, umbrales)
+
+    ev, bt, base, tabla, umbrales = _cache["lluvia"]
+
+    principal = "Regresion logistica"
+    top = tabla.sort_values(f"prob_{principal}", ascending=False).head(10).reset_index(drop=True)
+    top["posicion"] = range(1, len(top) + 1)
+    entrega = top.rename(columns={f"prob_{principal}": "probabilidad", "municipio": "municipio"})[
+        ["posicion", "municipio", "probabilidad", "prob_XGBoost", "lluvia_mm_mes_anterior", "lluvia_acum_12m", "lluvia_umbral"]
+    ].rename(columns={"prob_XGBoost": "prob_xgboost"})
+
+    html_top = entrega.to_html(index=False, classes="tabla", border=0, float_format=lambda v: f"{v:g}")
+
+    agreement = len(set(tabla.nlargest(10, f"prob_{principal}")["codigo_dane"]) & set(tabla.nlargest(10, "prob_XGBoost")["codigo_dane"]))
+
+    base = base.copy()
+    base["sens"] = base["tp"] / (base["tp"] + base["fn"]).replace(0, np.nan)
+    base["prec"] = base["tp"] / (base["tp"] + base["fp"]).replace(0, np.nan)
+    base_sens = float(base["sens"].mean())
+
+    probabilidades = tabla[f"prob_{principal}"]
+    top_probs = probabilidades.nlargest(10)
+
+    metricas = []
+    for nombre, res in ev["resultados"].items():
+        g = bt[bt["modelo"] == nombre]
+        metricas.append(
+            {
+                "nombre": nombre,
+                "auc": res["auc"],
+                "umbral": res["umbral"],
+                "sens": res["sensibilidad"],
+                "prec": res["precision"],
+                "tp": res["tp"],
+                "fp": res["fp"],
+                "fn": res["fn"],
+                "prob_media": res["prob_media"],
+                "frecuencia": res["frecuencia_real"],
+                "lift_medio": g["lift"].mean(),
+                "lift_med": g["lift"].median(),
+                "auc_eneros": g["auc"].mean(),
+            }
+        )
+
+    return render_template(
+        "lluvia.html",
+        titulo="Probabilidad de lluvia en enero de 2025",
+        umbral=umbrales[1],
+        html_top=html_top,
+        metricas=metricas,
+        backtest=bt,
+        base=base,
+        base_sens=base_sens,
+        n_tr=len(ev["entrena"]),
+        n_va=len(ev["valida"]),
+        acuerdo=agreement,
+        prob_max=float(probabilidades.max()),
+        prob_min_top10=float(top_probs.min()),
+        prob_max_top10=float(top_probs.max()),
+        frecuencia_enero=ev["panel"].query("mes==1")[L.OBJETIVO].mean(),
+    )
+
+
+@app.route("/descargar-lluvia")
+def descargar_lluvia():
+    import lluvia as L
+
+    if "lluvia" not in _cache:
+        vista_lluvia()
+    ev, bt, base, tabla, umbrales = _cache["lluvia"]
+    top = tabla.sort_values("prob_Regresion logistica", ascending=False).head(10)
+    top.insert(0, "posicion", range(1, len(top) + 1))
+    csv = top.to_csv(index=False).encode("utf-8")
+    return csv, 200, {
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": "attachment; filename=top10_lluvia_enero_2025.csv",
+    }
 
 
 @app.route("/descargar-predicciones")
@@ -336,8 +431,8 @@ def descargar_predicciones():
     import modelo as M
 
     if "predicciones" not in _cache:
-        _cache["predicciones"], _ = M.predecir_2025()
-    csv = _cache["predicciones"].to_csv(index=False).encode("utf-8")
+        _cache["predicciones"] = M.predecir_2025()[:2]
+    csv = _cache["predicciones"][0].to_csv(index=False).encode("utf-8")
     return csv, 200, {
         "Content-Type": "text/csv; charset=utf-8",
         "Content-Disposition": "attachment; filename=predicciones_2025.csv",
