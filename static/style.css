@@ -136,3 +136,52 @@ button, .btn {
 
 .ok { color: var(--ok); }
 .aviso { color: var(--warn); }
+
+.tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--line);
+}
+.tabs a {
+  padding: 8px 16px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 13px;
+  border-bottom: 2px solid transparent;
+}
+.tabs a:hover { color: var(--text); }
+.tabs a.activo { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+
+.aviso-fuga {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--warn);
+  border-radius: 8px;
+  padding: 18px 20px;
+}
+.aviso-fuga h2 { margin-top: 0; }
+.aviso-fuga h3 { font-size: 13px; margin: 12px 0 6px; text-transform: uppercase; letter-spacing: .5px; }
+.aviso-fuga h3.verde { color: var(--ok); }
+.aviso-fuga h3.rojo { color: var(--warn); }
+.aviso-fuga ul { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+.aviso-fuga li { margin-bottom: 4px; }
+.dos-col { display: grid; grid-template-columns: 1fr 1.6fr; gap: 24px; }
+
+.tabla.corta { max-width: 420px; }
+.tabla.corta + .tabla.corta { margin-top: 18px; }
+.fila-base { background: #1d2833; }
+.badge.neutro { background: rgba(139,155,176,.15); color: var(--muted); }
+
+.scroll.alto { max-height: 720px; }
+
+.nota {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  padding: 18px 20px;
+}
+.nota h2 { margin-top: 0; }
+.nota ul { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+.nota li { margin-bottom: 8px; }

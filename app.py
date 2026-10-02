@@ -124,35 +124,33 @@ def limpiar_panel(df):
     )
 
     calc_12m = df.groupby("codigo_dane")["eventos_mes"].transform(lambda s: s.rolling(12, min_periods=1).sum())
-    incoherentes = df["eventos_12m"] < df["eventos_mes"]
-    n_incoh = int(incoherentes.sum())
-    if n_incoh:
-        df.loc[incoherentes, "eventos_12m"] = calc_12m[incoherentes].astype("int64")
+    dif = int((calc_12m != df["eventos_12m"]).sum())
+    imposible = int((df["eventos_12m"] < df["eventos_mes"]).sum())
     reporte.append(
         _paso(
-            "eventos_12m < eventos_mes",
-            "corregido" if n_incoh else "ok",
-            "imposible en una ventana movil de 12 meses que incluye el mes actual; "
-            + (f"{n_incoh} filas recalculadas con la suma rolling de eventos_mes" if n_incoh else "ninguna fila afectada"),
-            n_incoh,
+            "eventos_12m (ventana movil)",
+            "sin tocar",
+            f"{dif} filas no coinciden con la suma movil de eventos_mes, de las cuales {imposible} "
+            "tienen eventos_12m < eventos_mes (imposible si la ventana incluye el mes actual). "
+            "No se corrige: el modelo reconstruye su propia version sin fuga (eventos_12m_lag)",
+            imposible,
         )
     )
 
     desalineado = int(((df["eventos_mes"] > 0) & (df["hubo_mm"] == 0)).sum())
     reporte.append(
         _paso(
-            "eventos_mes > 0 con hubo_mm = 0",
-            "aviso",
-            f"{desalineado} filas: hubo_mm no se deduce de eventos_mes ni de un umbral de lluvia_mm "
-            "(lluvia de hasta 2070.9 mm con hubo_mm = 0), se conserva tal cual",
-            desalineado,
+            "eventos_mes y hubo_mm",
+            "ok",
+            f"{desalineado} filas con eventos_mes > 0 y hubo_mm = 0. No es un error: eventos_mes cuenta "
+            "eventos de lluvia y hubo_mm indica si hubo movimiento en masa. Son cosas distintas",
+            0,
         )
     )
 
     df["fecha"] = pd.to_datetime(dict(year=df["anio"], month=df["mes"], day=1))
     df["trimestre"] = df["mes"].sub(1).floordiv(3) + 1
-    df["lluvia_anual_acum_mm"] = df.groupby("codigo_dane")["lluvia_mm"].cumsum()
-    reporte.append(_paso("Variables derivadas", "ok", "fecha, trimestre y lluvia_anual_acum_mm agregadas"))
+    reporte.append(_paso("Variables derivadas", "ok", "fecha y trimestre agregadas (sin variables que filtren el futuro)"))
 
     return df, reporte
 
@@ -230,6 +228,120 @@ def index():
         fin=min(pagina * POR_PAGINA, len(vista)),
         sin_geo=sin_geo,
     )
+
+
+@app.route("/modelo")
+def vista_modelo():
+    import modelo as M
+
+    if "ajuste" not in _cache:
+        _cache["ajuste"] = M.ejecutar()
+    r = _cache["ajuste"]
+
+    base = r["base"]["metricas"]
+    filas_modelos = []
+    for nombre, res in r["resultados"].items():
+        m = res["metricas"]
+        curva = res["curva"]
+        filas_modelos.append(
+            {
+                "nombre": nombre,
+                "umbral": res["umbral"],
+                "auc": res["auc"],
+                "sensibilidad": m["sensibilidad"],
+                "precision": m["precision"],
+                "f1": m["f1"],
+                "supera": m["sensibilidad"] > base["sensibilidad"],
+                "importancias": res["importancias"].head(6),
+                "curva": curva,
+            }
+        )
+
+    principal = max(r["resultados"].items(), key=lambda kv: kv[1]["metricas"]["f1"])
+    X = M.predecir_enero_2025()
+    ranking = X.assign(probabilidad=principal[1]["modelo"].predict_proba(X[M.FEATURES])[:, 1]).sort_values(
+        "probabilidad", ascending=False
+    )
+    ranking["probabilidad"] = (100 * ranking["probabilidad"]).round(1)
+    umbral_pct = 100 * principal[1]["umbral"]
+    alertas = ranking[ranking["probabilidad"] >= umbral_pct]
+
+    return render_template(
+        "modelo.html",
+        titulo="Modelo de anticipacion de movimientos en masa",
+        base=base,
+        modelos=filas_modelos,
+        principal=principal[0],
+        ranking=ranking.head(10),
+        umbral_pct=umbral_pct,
+        n_alertas=len(alertas),
+        n_municipios=len(ranking),
+        fugas=M.FUGAS,
+        features=M.FEATURES,
+        n_tr=len(r["entrena"]),
+        n_va=len(r["valida"]),
+        pos_tr=int(r["entrena"]["hubo_mm"].sum()),
+        pos_va=int(r["valida"]["hubo_mm"].sum()),
+        anio_tr=f"{min(M.ANIOS_ENTRENAMIENTO)}&ndash;{max(M.ANIOS_ENTRENAMIENTO)}",
+        anio_va=f"{min(M.ANIOS_VALIDACION)}&ndash;{max(M.ANIOS_VALIDACION)}",
+    )
+
+
+@app.route("/predicciones")
+def vista_predicciones():
+    import modelo as M
+
+    if "predicciones" not in _cache:
+        tabla, _ = M.predecir_2025()
+        _cache["predicciones"] = tabla
+
+    t = _cache["predicciones"]
+    modelos = ["Regresion logistica", "XGBoost"]
+
+    tabla_html = (
+        t.sort_values(["anio", "mes", "codigo_dane"])
+        .to_html(index=False, classes="tabla", border=0, float_format=lambda v: f"{v:g}")
+    )
+
+    resumen_meses = []
+    for mes in range(1, 13):
+        bloque = t[t["mes"] == mes]
+        fila = {"mes": mes, "reales": int(bloque["hubo_mm"].sum()), "celdas": []}
+        for n in modelos:
+            pred = bloque[f"pred_{n}"]
+            tp = int(((bloque["hubo_mm"] == 1) & (pred == 1)).sum())
+            fn = int(((bloque["hubo_mm"] == 1) & (pred == 0)).sum())
+            fp = int(((bloque["hubo_mm"] == 0) & (pred == 1)).sum())
+            fila["celdas"].append(
+                {
+                    "texto": f"{tp / (tp + fn):.2f} / {tp / (tp + fp):.2f}" if tp + fn and tp + fp else "s/p",
+                    "detalle": f"TP {tp} · FN {fn} · FP {fp}",
+                }
+            )
+        resumen_meses.append(fila)
+
+    return render_template(
+        "predicciones.html",
+        titulo="Predicciones 2025",
+        tabla=tabla_html,
+        modelos=modelos,
+        resumen_meses=resumen_meses,
+        n=len(t),
+        anio=2025,
+    )
+
+
+@app.route("/descargar-predicciones")
+def descargar_predicciones():
+    import modelo as M
+
+    if "predicciones" not in _cache:
+        _cache["predicciones"], _ = M.predecir_2025()
+    csv = _cache["predicciones"].to_csv(index=False).encode("utf-8")
+    return csv, 200, {
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": "attachment; filename=predicciones_2025.csv",
+    }
 
 
 @app.route("/descargar")

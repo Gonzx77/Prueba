@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ titulo }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <nav class="tabs">
+    <a href="{{ url_for('index') }}">Datos</a>
+    <a class="activo" href="{{ url_for('vista_modelo') }}">Modelo</a>
+    <a href="{{ url_for('vista_predicciones') }}">Predicciones 2025</a>
+  </nav>
+
+  <header>
+    <h1>{{ titulo }}</h1>
+    <p class="sub">
+      Entrenamiento {{ anio_tr|safe }} ({{ '{:,}'.format(n_tr) }} filas, {{ pos_tr }} positivos)
+      &middot; Validacion {{ anio_va|safe }} ({{ '{:,}'.format(n_va) }} filas, {{ pos_va }} positivos)
+      &middot; <strong>2025 no se toca</strong>
+    </p>
+  </header>
+
+  <section class="aviso-fuga">
+    <h2>Fuga de datos: que se puede usar y que no</h2>
+    <p>Al inicio del mes <em>t</em> solo existe informacion hasta <em>t&minus;1</em>.</p>
+    <div class="dos-col">
+      <div>
+        <h3 class="verde">Permitido</h3>
+        <ul>{% for f in features %}<li><code>{{ f }}</code></li>{% endfor %}</ul>
+      </div>
+      <div>
+        <h3 class="rojo">Prohibido</h3>
+        <ul>{% for k, v in fugas.items() %}<li><code>{{ k }}</code> &mdash; {{ v }}</li>{% endfor %}</ul>
+      </div>
+    </div>
+    <p class="sub">Nota: <code>eventos_12m</code> viene tal cual en el enunciado, pero su ventana incluye
+      el mes actual, asi que tambien filtra el presente. El modelo usa <code>eventos_12m_lag</code>, la misma
+      ventana desplazada un mes.</p>
+  </section>
+
+  <section>
+    <h2>Resultados en validacion ({{ anio_va }})</h2>
+    <table class="tabla">
+      <thead>
+        <tr>
+          <th>Modelo</th><th>Umbral</th><th>AUC</th>
+          <th class="num">Sensibilidad</th><th class="num">Precision</th><th class="num">F1</th>
+          <th>vs linea base</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="fila-base">
+          <td>Linea base (mismo mes del ano anterior)</td>
+          <td>&mdash;</td><td>&mdash;</td>
+          <td class="num">{{ '%.3f'|format(base.sensibilidad) }}</td>
+          <td class="num">{{ '%.3f'|format(base.precision) }}</td>
+          <td class="num">{{ '%.3f'|format(base.f1) }}</td>
+          <td><span class="badge">referencia</span></td>
+        </tr>
+        {% for m in modelos %}
+        <tr>
+          <td>{{ m.nombre }}</td>
+          <td>{{ '%.3f'|format(m.umbral) }}</td>
+          <td>{{ '%.3f'|format(m.auc) }}</td>
+          <td class="num"><strong>{{ '%.3f'|format(m.sensibilidad) }}</strong></td>
+          <td class="num">{{ '%.3f'|format(m.precision) }}</td>
+          <td class="num">{{ '%.3f'|format(m.f1) }}</td>
+          <td>
+            {% if m.supera %}<span class="badge ok">supera en sensibilidad</span>
+            {% else %}<span class="badge aviso">no supera</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="sub">Metrica priorizada: <strong>sensibilidad</strong>. Un falso negativo es un municipio que
+      deslomba y no se avisa: sin alerta, sin evacuacion, con victimsas. El costo de un falso positivo
+      (evacuacion innecesaria) es mucho menor, asi que aceptamosteger mas alertas a cambio de recall.</p>
+    <p class="sub">La <strong>exactitud no se reporta como metrica principal</strong>: predecir siempre
+      &laquo;no&raquo; da 90.8% de exactitud y 0 de sensibilidad.</p>
+  </section>
+
+  <section>
+    <h2>Bajar el umbral: que se gana y que se pierde</h2>
+    {% for m in modelos %}
+      {% if m.nombre == principal %}
+      <p class="sub">Curva de {{ m.nombre }} (el modelo con mejor F1).</p>
+      {% endif %}
+    {% endfor %}
+    <table class="tabla">
+      <thead><tr><th>Umbral</th><th class="num">Sensibilidad</th><th class="num">Precision</th><th class="num">Falsos negativos</th><th class="num">Municipios alertados</th></tr></thead>
+      <tbody>
+        {% for _, f in modelos[0].curva.iterrows() %}
+        {% if loop.index0 % 10 == 0 %}
+        <tr>
+          <td>{{ '%.3f'|format(f.umbral) }}</td>
+          <td class="num">{{ '%.3f'|format(f.sensibilidad) }}</td>
+          <td class="num">{{ '%.3f'|format(f.precision) }}</td>
+          <td class="num">{{ ((1 - f.sensibilidad) * pos_va)|round|int }}</td>
+          <td class="num">&mdash;</td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Diez municipios con mayor probabilidad &middot; enero 2025</h2>
+    <p class="sub">
+      Modelo {{ principal }}. Features construidas <strong>solo con datos hasta diciembre 2024</strong>;
+      el archivo de 2025 no se abrio para generar este ranking.
+      Con umbral operativo de {{ '%.1f'|format(umbral_pct) }}% se alertan {{ n_alertas }} de {{ n_municipios }} municipios.
+      <a href="{{ url_for('vista_predicciones') }}">Ver las 1044 predicciones de 2025 &rarr;</a>
+    </p>
+    <table class="tabla">
+      <thead>
+        <tr>
+          <th>#</th><th>Municipio</th>
+          <th class="num">Probabilidad</th><th class="num">Lluvia mes anterior</th>
+          <th class="num">Lluvia acum. 12m</th><th class="num">Eventos 12m (lag)</th>
+          <th class="num">Altitud</th><th>Alerta</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for _, f in ranking.iterrows() %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td>{{ f.municipio }}</td>
+          <td class="num"><strong>{{ f.probabilidad }}%</strong></td>
+          <td class="num">{{ f.lluvia_mm_mes_anterior }}</td>
+          <td class="num">{{ f.lluvia_acum_12m }}</td>
+          <td class="num">{{ f.eventos_12m_lag }}</td>
+          <td class="num">{{ f.altitud_m }} m</td>
+          <td>{% if f.probabilidad >= umbral_pct %}<span class="badge ok">si</span>{% else %}<span class="badge">no</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Variables mas influyentes</h2>
+    {% for m in modelos %}
+    <p class="sub">{{ m.nombre }}</p>
+    <table class="tabla corta">
+      <thead><tr><th>Variable</th><th class="num">Peso</th></tr></thead>
+      <tbody>
+        {% for var, val in m.importancias.items() %}
+        <tr><td><code>{{ var }}</code></td><td class="num">{{ '%.3f'|format(val) }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endfor %}
+  </section>
+</body>
+</html>

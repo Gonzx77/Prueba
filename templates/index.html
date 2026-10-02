@@ -7,9 +7,15 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
+  <nav class="tabs">
+    <a class="activo" href="{{ url_for('index') }}">Datos</a>
+    <a href="{{ url_for('vista_modelo') }}">Modelo</a>
+    <a href="{{ url_for('vista_predicciones') }}">Predicciones 2025</a>
+  </nav>
+
   <header>
     <h1>{{ titulo }}</h1>
-    <p class="sub">Limpieza del panel de entrenamiento 2015-2024 · <code>Datos/panel_entrenamiento_2015_2024.csv</code></p>
+    <p class="sub">Limpieza del panel de entrenamiento 2015-2024 &middot; <code>Datos/panel_entrenamiento_2015_2024.csv</code></p>
   </header>
 
   <section class="cards">
@@ -43,7 +49,7 @@
     {% if sin_geo %}
     <p class="aviso">{{ sin_geo|length }} municipios del panel no tienen polígono en el GeoJSON.</p>
     {% else %}
-    <p class="ok">Los 87 municipios del panel made emparejan 1:1 con el GeoJSON (join por <code>codigo_dane</code>).</p>
+    <p class="ok">Los 87 municipios del panel emparejan 1:1 con el GeoJSON (join por <code>codigo_dane</code>).</p>
     {% endif %}
   </section>
 
