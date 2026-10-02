@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ titulo }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header>
+    <h1>{{ titulo }}</h1>
+    <p class="sub">Limpieza del panel de entrenamiento 2015-2024 · <code>Datos/panel_entrenamiento_2015_2024.csv</code></p>
+  </header>
+
+  <section class="cards">
+    <div class="card"><span class="k">Filas</span><span class="v">{{ resumen.filas }}</span></div>
+    <div class="card"><span class="k">Municipios</span><span class="v">{{ resumen.municipios }}</span></div>
+    <div class="card"><span class="k">Años</span><span class="v">{{ resumen.anios }}</span></div>
+    <div class="card"><span class="k">Observaciones</span><span class="v">{{ resumen.meses }}</span></div>
+    <div class="card"><span class="k">Lluvia media</span><span class="v">{{ resumen.lluvia_media }} mm</span></div>
+    <div class="card"><span class="k">Lluvia máxima</span><span class="v">{{ resumen.lluvia_max }} mm</span></div>
+    <div class="card"><span class="k">Eventos totales</span><span class="v">{{ resumen.eventos_totales }}</span></div>
+    <div class="card"><span class="k">Meses con evento</span><span class="v">{{ resumen.tasa_evento }}</span></div>
+  </section>
+
+  <section>
+    <h2>Reporte de limpieza</h2>
+    <table class="tabla reporte">
+      <thead>
+        <tr><th>Validación</th><th>Estado</th><th>Detalle</th><th class="num">Filas</th></tr>
+      </thead>
+      <tbody>
+        {% for paso in reporte %}
+        <tr>
+          <td>{{ paso.nombre }}</td>
+          <td><span class="badge {{ paso.estado }}">{{ paso.estado }}</span></td>
+          <td class="detalle">{{ paso.detalle }}</td>
+          <td class="num">{{ '{:,}'.format(paso.filas) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if sin_geo %}
+    <p class="aviso">{{ sin_geo|length }} municipios del panel no tienen polígono en el GeoJSON.</p>
+    {% else %}
+    <p class="ok">Los 87 municipios del panel made emparejan 1:1 con el GeoJSON (join por <code>codigo_dane</code>).</p>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>Dataframe</h2>
+    <form method="get" class="filtros">
+      <label>Municipio
+        <select name="municipio">
+          <option value="">Todos</option>
+          {% for m in municipios %}
+          <option value="{{ m }}" {% if m == municipio_sel %}selected{% endif %}>{{ m }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Año
+        <select name="anio">
+          <option value="">Todos</option>
+          {% for a in anios %}
+          <option value="{{ a }}" {% if a == anio_sel %}selected{% endif %}>{{ a }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit">Filtrar</button>
+      <a class="btn" href="{{ url_for('descargar') }}">Descargar CSV limpio</a>
+      <a class="btn secundario" href="{{ url_for('index', recargar=1) }}">Recargar datos</a>
+    </form>
+
+    <p class="sub">
+      Mostrando {{ inicio }}–{{ fin }} de {{ '{:,}'.format(filas_vista) }} filas filtradas
+      ({{ '{:,}'.format(filas_total) }} en total) · página {{ pagina }} de {{ total_paginas }}
+    </p>
+
+    <div class="scroll">{{ tabla|safe }}</div>
+
+    <nav class="paginacion">
+      {% set q = {'municipio': municipio_sel or '', 'anio': anio_sel or ''} %}
+      <a class="btn {% if pagina <= 1 %}off{% endif %}"
+         href="{{ url_for('index', pagina=pagina-1, **q) }}">&larr; Anterior</a>
+      <span>{{ pagina }} / {{ total_paginas }}</span>
+      <a class="btn {% if pagina >= total_paginas %}off{% endif %}"
+         href="{{ url_for('index', pagina=pagina+1, **q) }}">Siguiente &rarr;</a>
+    </nav>
+  </section>
+</body>
+</html>
