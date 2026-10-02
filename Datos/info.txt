@@ -1,0 +1,64 @@
+4. Reto medio: anticipar movimientos en masa por municipio
+
+Enunciado
+
+Con el panel municipio-mes, construyan un modelo que estime la probabilidad de que un municipio registre al menos un movimiento en masa en un mes, usando solo información disponible al inicio de ese mes.
+
+1. Entrenamiento y evaluación
+
+Entrenen con los años hasta 2024 y evalúen con 2025. No mezclen años.
+
+2. Comparación con una línea base
+
+Comparen su modelo con una línea base: repetir lo que pasó el mismo mes del año anterior.
+
+3. Métricas
+
+Reporten:
+- Sensibilidad (recall).
+- Precisión.
+
+Además, indiquen cuál priorizan y por qué.
+
+4. Presentación de resultados
+
+Muestren los diez municipios con mayor probabilidad para el primer mes de 2025 en una aplicación o cuaderno presentable.
+
+Trampa deliberada: fuga de datos
+
+La columna lluvia_mm es la lluvia del mismo mes, que no se conoce al inicio del mes.
+
+Un equipo que la use sin decirlo está usando información del futuro.
+
+Lo correcto es usar lluvia_mm_mes_anterior o justificar que se utilizaría un pronóstico.
+
+El jurado preguntará por esto a todos los equipos.
+
+Solución de referencia
+
+Se puede utilizar:
+- Regresión logística.
+- Bosque aleatorio.
+
+Con:
+- lluvia_mm_mes_anterior
+- eventos_12m
+- altitud_m
+- mes
+
+Debido al desbalance, se puede utilizar peso de clase o ajuste del umbral.
+
+El modelo debe superar a la línea base en sensibilidad.
+
+¿Qué distingue a un buen equipo?
+
+Un buen equipo:
+- No reporta exactitud como métrica principal.
+- Detecta la fuga de datos.
+- Explica qué significa un falso negativo en un municipio concreto.
+
+Preguntas específicas del jurado
+
+¿Usaron lluvia_mm? ¿Se conoce al inicio del mes?
+
+Si bajan el umbral de decisión, ¿qué ganan y qué pierden?
